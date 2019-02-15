@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """ Use jinja2 templates to fill and sign PDF forms. """
 
 import argparse
@@ -23,6 +22,7 @@ from PyPDF2 import PdfFileWriter, PdfFileReader
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 from subprocess import Popen, PIPE
+
 try:
     from cStringIO import StringIO as BytesIO
 except ImportError:
@@ -39,6 +39,7 @@ if sys.version_info[0] == 3:
 try:
     from logging import NullHandler
 except ImportError:
+
     class NullHandler(logging.Handler):
         def emit(self, record):
             pass
@@ -116,13 +117,15 @@ class PdfJinja(object):
             self.parse_pdf(fp)
 
     def register_filters(self):
-        self.jinja_env.filters.update(dict(
-            date=self.format_date,
-            paste=self.paste,
-            check=self.check,
-            X=lambda v: "Yes" if v else "Off",
-            Y=lambda v: "Yes" if v else "Off",
-        ))
+        self.jinja_env.filters.update(
+            dict(
+                date=self.format_date,
+                paste=self.paste,
+                check=self.check,
+                X=lambda v: "Yes" if v else "Off",
+                Y=lambda v: "Yes" if v else "Off",
+            )
+        )
 
     def check(self, data):
         self.rendered[self.context["name"]] = bool(data)
@@ -156,21 +159,24 @@ class PdfJinja(object):
         if isinstance(page.annots, PDFObjRef):
             annots = page.annots.resolve()
 
-        annots = (
-            r.resolve() for r in annots if isinstance(r, PDFObjRef))
+        annots = (r.resolve() for r in annots if isinstance(r, PDFObjRef))
 
-        widgets = (
-            r for r in annots if r["Subtype"].name == "Widget")
+        widgets = (r for r in annots if r["Subtype"].name == "Widget")
 
         for ref in widgets:
             data_holder = ref
             try:
                 name = ref["T"]
             except KeyError:
-                ref = ref['Parent'].resolve()
-                name = ref['T']
+                ref = ref["Parent"].resolve()
+                name = ref["T"]
             field = self.fields.setdefault(name, {"name": name, "page": pgnum})
-            if "FT" in data_holder and data_holder["FT"].name in ("Btn", "Tx", "Ch", "Sig"):
+            if "FT" in data_holder and data_holder["FT"].name in (
+                "Btn",
+                "Tx",
+                "Ch",
+                "Sig",
+            ):
                 field["rect"] = data_holder["Rect"]
 
             if "TU" in ref:
@@ -184,7 +190,6 @@ class PdfJinja(object):
                     field["template"] = self.jinja_env.from_string(tmpl)
                 except (UnicodeDecodeError, TemplateSyntaxError) as err:
                     logger.error("%s: %s %s", name, tmpl, err)
-
 
     def template_args(self, data):
         kwargs = {}
@@ -206,10 +211,12 @@ class PdfJinja(object):
         args = [
             "pdftk",
             self.filename,
-            "fill_form", "-",
-            "output", "-",
+            "fill_form",
+            "-",
+            "output",
+            "-",
             "dont_ask",
-            "flatten"
+            "flatten",
         ]
 
         p = Popen(args, stdin=PIPE, stdout=PIPE, stderr=PIPE)
@@ -219,7 +226,7 @@ class PdfJinja(object):
 
         return BytesIO(stdout)
 
-    def __call__(self, data, attachments=[], pages=None):
+    def __call__(self, data, attachments=[], pages=None, forced_watermark=None):
         self.rendered = {}
         for field, ctx in self.fields.items():
             if "template" not in ctx:
@@ -237,13 +244,20 @@ class PdfJinja(object):
                 # Skip the field if it is already rendered by filter
                 if field not in self.rendered:
                     if PY3:
-                        field = field.decode('utf-8')
+                        field = field.decode("utf-8")
                     self.rendered[field] = rendered_field
 
         filled = PdfFileReader(self.exec_pdftk(self.rendered))
         for pagenumber, watermark in self.watermarks:
             page = filled.getPage(pagenumber)
             page.mergePage(watermark)
+
+        if forced_watermark:
+            pages = range(filled.getNumPages())
+            for p in pages:
+                page = filled.getPage(pagenumber)
+                _watermark = Attachment(**forced_watermark)
+                page.mergePage(_watermark.pdf())
 
         output = PdfFileWriter()
         pages = pages or range(filled.getNumPages())
@@ -259,24 +273,34 @@ class PdfJinja(object):
 def parse_args(description):
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument(
-        "-f", "--font", type=str, default=None,
-        help="TTF font for attachment labels.")
+        "-f", "--font", type=str, default=None, help="TTF font for attachment labels."
+    )
 
     parser.add_argument(
-        "-j", "--json", type=argparse.FileType("rb"), default=sys.stdin,
-        help="JSON format file with data.")
+        "-j",
+        "--json",
+        type=argparse.FileType("rb"),
+        default=sys.stdin,
+        help="JSON format file with data.",
+    )
 
     parser.add_argument(
-        "-p", "--page", type=str, default=None,
-        help="Pages to select (Comma separated).")
+        "-p",
+        "--page",
+        type=str,
+        default=None,
+        help="Pages to select (Comma separated).",
+    )
+
+    parser.add_argument("pdf", type=str, help="PDF form with jinja2 tooltips.")
 
     parser.add_argument(
-        "pdf", type=str,
-        help="PDF form with jinja2 tooltips.")
-
-    parser.add_argument(
-        "out", nargs="?", type=argparse.FileType("wb"), default=sys.stdout,
-        help="PDF filled with the form data.")
+        "out",
+        nargs="?",
+        type=argparse.FileType("wb"),
+        default=sys.stdout,
+        help="PDF filled with the form data.",
+    )
 
     return parser.parse_args()
 
@@ -288,11 +312,13 @@ def main():
     pages = args.page and args.page.split(",")
 
     import json
-    json_data = args.json.read().decode('utf-8')
+
+    json_data = args.json.read().decode("utf-8")
     data = json.loads(json_data)
     Attachment.font = args.font
     attachments = [
-        Attachment(**kwargs) for kwargs in data.pop("attachments", [])
+        Attachment(**kwargs) 
+        for kwargs in data.pop("attachments", [])
     ]
 
     output = pdfparser(data, attachments, pages)
